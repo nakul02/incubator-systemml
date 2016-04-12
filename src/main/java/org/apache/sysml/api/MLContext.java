@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -68,6 +68,7 @@ import org.apache.sysml.runtime.controlprogram.context.ExecutionContextFactory;
 import org.apache.sysml.runtime.controlprogram.context.SparkExecutionContext;
 import org.apache.sysml.runtime.instructions.Instruction;
 import org.apache.sysml.runtime.instructions.cp.Data;
+import org.apache.sysml.runtime.instructions.cp.ScalarObject;
 import org.apache.sysml.runtime.instructions.spark.data.RDDObject;
 import org.apache.sysml.runtime.instructions.spark.functions.ConvertStringToLongTextPair;
 import org.apache.sysml.runtime.instructions.spark.functions.CopyBlockPairFunction;
@@ -82,6 +83,7 @@ import org.apache.sysml.runtime.matrix.data.InputInfo;
 import org.apache.sysml.runtime.matrix.data.MatrixBlock;
 import org.apache.sysml.runtime.matrix.data.MatrixIndexes;
 import org.apache.sysml.runtime.matrix.data.OutputInfo;
+import org.apache.sysml.udf.Matrix;
 import org.apache.sysml.utils.Explain;
 import org.apache.sysml.utils.Explain.ExplainCounts;
 import org.apache.sysml.utils.Statistics;
@@ -107,8 +109,8 @@ import org.apache.sysml.utils.Statistics;
  * scala> val ml = new MLContext(sc)
  * </code></pre>
  * <p>
- * Register input and output DataFrame/RDD 
- * Supported format: 
+ * Register input and output DataFrame/RDD
+ * Supported format:
  * <ol>
  * <li> DataFrame
  * <li> CSV/Text (as JavaRDD<String> or JavaPairRDD<LongWritable, Text>)
@@ -133,19 +135,19 @@ import org.apache.sysml.utils.Statistics;
  * </code></pre>
  * <p>
  * Also supported: calling script with positional arguments (args) and named arguments (nargs):
- * <pre><code> 
+ * <pre><code>
  * scala> val args = Array("V.mtx", "W.mtx",  "H.mtx",  "2000", "1500",  "50",  "1",  "WOut.mtx",  "HOut.mtx")
- * scala> val nargs = Map("maxIter"->"1", "V" -> "") 
+ * scala> val nargs = Map("maxIter"->"1", "V" -> "")
  * scala> val outputs = ml.execute("GNMF.dml", args) # or ml.execute("GNMF_namedArgs.dml", nargs)
- * </code></pre>  
+ * </code></pre>
  * <p>
  * To run the script again using different (or even same arguments), but using same registered input/outputs:
- * <pre><code> 
+ * <pre><code>
  * scala> val new_outputs = ml.execute("GNMF.dml", new_args)
  * </code></pre>
  * <p>
  * However, to register new input/outputs, you need to first reset MLContext
- * <pre><code> 
+ * <pre><code>
  * scala> ml.reset()
  * scala> ml.registerInput("V", newV)
  * </code></pre>
@@ -157,33 +159,33 @@ import org.apache.sysml.utils.Statistics;
  * </code></pre>
  * <p>
  * If monitoring performance is enabled,
- * <pre><code> 
+ * <pre><code>
  * scala> print(ml.getMonitoringUtil().getExplainOutput())
  * scala> ml.getMonitoringUtil().getRuntimeInfoInHTML("runtime.html")
  * </code></pre>
  * <p>
  * Note: The execute(...) methods does not support parallel calls from same or different MLContext.
  * This is because current SystemML engine does not allow multiple invocation in same JVM.
- * So, if you plan to create a system which potentially creates multiple MLContext, 
+ * So, if you plan to create a system which potentially creates multiple MLContext,
  * it is recommended to guard the execute(...) call using
- * <pre><code>  
+ * <pre><code>
  * synchronized(MLContext.class) { ml.execute(...); }
  * </code></pre>
  */
 public class MLContext {
-	
+
 	// ----------------------------------------------------
 	// TODO: To make MLContext multi-threaded, track getCurrentMLContext and also all singletons and
 	// static variables in SystemML codebase.
 	private static MLContext _activeMLContext = null;
-	
+
 	// Package protected so as to maintain a clean public API for MLContext.
 	// Use MLContextProxy.getActiveMLContext() if necessary
 	static MLContext getActiveMLContext() {
 		return _activeMLContext;
 	}
 	// ----------------------------------------------------
-	
+
 	private SparkContext _sc = null; // Read while creating SystemML's spark context
 	public SparkContext getSparkContext() {
 		if(_sc == null) {
@@ -195,13 +197,14 @@ public class MLContext {
 	private ArrayList<String> _outVarnames = null;
 	private LocalVariableMap _variables = null; // temporary symbol table
 	private Program _rtprog = null;
-	
+
 	private Map<String, String> _additionalConfigs = new HashMap<String, String>();
-	
+
+
 	// --------------------------------------------------
 	// _monitorUtils is set only when MLContext(sc, true)
 	private SparkMonitoringUtil _monitorUtils = null;
-	
+
 	/**
 	 * Experimental API. Not supported in Python MLContext API.
 	 * @return
@@ -210,7 +213,7 @@ public class MLContext {
 		return _monitorUtils;
 	}
 	// --------------------------------------------------
-	
+
 	/**
 	 * Create an associated MLContext for given spark session.
 	 * @param sc
@@ -219,7 +222,7 @@ public class MLContext {
 	public MLContext(SparkContext sc) throws DMLRuntimeException {
 		initializeSpark(sc, false, false);
 	}
-	
+
 	/**
 	 * Create an associated MLContext for given spark session.
 	 * @param sc
@@ -228,7 +231,7 @@ public class MLContext {
 	public MLContext(JavaSparkContext sc) throws DMLRuntimeException {
 		initializeSpark(sc.sc(), false, false);
 	}
-	
+
 	/**
 	 * Allow users to provide custom named-value configuration.
 	 * @param paramName
@@ -237,13 +240,44 @@ public class MLContext {
 	public void setConfig(String paramName, String paramVal) {
 		_additionalConfigs.put(paramName, paramVal);
 	}
-	
+
+
+	/**
+	 * To be used by SystemML tools only.
+	 * @return the {@link LocalVariableMap} instance with which script is run
+   */
+	public LocalVariableMap getLocalVariablesMap() {
+		if (_variables == null)
+			_variables = new LocalVariableMap();
+		return _variables;
+	}
+
+	/**
+	 * To be used by SystemML tools only.
+	 * @return list of variable names that are registered as input
+   */
+	public ArrayList<String> getInVarnames(){
+		if (_inVarnames == null)
+			_inVarnames = new ArrayList<String>();
+		return _inVarnames;
+	}
+
+	/**
+	 * To be used by SystemML tools only.
+	 * @return list of variable names that are registered as output
+   */
+	public ArrayList<String> getOutVarnames(){
+		if (_outVarnames == null)
+			_outVarnames = new ArrayList<String>();
+		return _outVarnames;
+	}
+
 	// ====================================================================================
 	// Register input APIs
 	// 1. DataFrame
-	
+
 	/**
-	 * Register DataFrame as input. DataFrame is assumed to be in row format and each cell can be converted into double 
+	 * Register DataFrame as input. DataFrame is assumed to be in row format and each cell can be converted into double
 	 * through  Double.parseDouble(cell.toString()). This is suitable for passing dense matrices. For sparse matrices,
 	 * consider passing through text format (using JavaRDD<String>, format="text")
 	 * <p>
@@ -257,12 +291,12 @@ public class MLContext {
 	public void registerInput(String varName, DataFrame df) throws DMLRuntimeException {
 		registerInput(varName, df, false);
 	}
-	
+
 	/**
-	 * Register DataFrame as input. 
+	 * Register DataFrame as input.
 	 * Marks the variable in the DML script as input variable.
 	 * Note that this expects a "varName = read(...)" statement in the DML script which through non-MLContext invocation
-	 * would have been created by reading a HDFS file.  
+	 * would have been created by reading a HDFS file.
 	 * @param varName
 	 * @param df
 	 * @param containsID false if the DataFrame has an column ID which denotes the row ID.
@@ -273,7 +307,7 @@ public class MLContext {
 		JavaPairRDD<MatrixIndexes, MatrixBlock> rdd = RDDConverterUtilsExt.dataFrameToBinaryBlock(new JavaSparkContext(_sc), df, mcOut, containsID);
 		registerInput(varName, rdd, mcOut);
 	}
-	
+
 	/**
 	 * Experimental API. Not supported in Python MLContext API.
 	 * @param varName
@@ -283,7 +317,7 @@ public class MLContext {
 	public void registerInput(String varName, MLMatrix df) throws DMLRuntimeException {
 		registerInput(varName, MLMatrix.getRDDLazily(df), df.mc);
 	}
-	
+
 	// ------------------------------------------------------------------------------------
 	// 2. CSV/Text: Usually JavaRDD<String>, but also supports JavaPairRDD<LongWritable, Text>
 	/**
@@ -301,11 +335,11 @@ public class MLContext {
 	 * @param fillValue
 	 * @throws DMLRuntimeException
 	 */
-	public void registerInput(String varName, JavaRDD<String> rdd, String format, boolean hasHeader, 
+	public void registerInput(String varName, JavaRDD<String> rdd, String format, boolean hasHeader,
 			String delim, boolean fill, double fillValue) throws DMLRuntimeException {
 		registerInput(varName, rdd, format, hasHeader, delim, fill, fillValue, -1, -1, -1);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Method for supplying csv file format properties, but without dimensions or nnz
 	 * <p>
@@ -321,11 +355,11 @@ public class MLContext {
 	 * @param fillValue
 	 * @throws DMLRuntimeException
 	 */
-	public void registerInput(String varName, RDD<String> rdd, String format, boolean hasHeader, 
+	public void registerInput(String varName, RDD<String> rdd, String format, boolean hasHeader,
 			String delim, boolean fill, double fillValue) throws DMLRuntimeException {
 		registerInput(varName, rdd.toJavaRDD(), format, hasHeader, delim, fill, fillValue, -1, -1, -1);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Method for supplying csv file format properties along with dimensions or nnz
 	 * <p>
@@ -344,11 +378,11 @@ public class MLContext {
 	 * @param nnz
 	 * @throws DMLRuntimeException
 	 */
-	public void registerInput(String varName, RDD<String> rdd, String format, boolean hasHeader, 
+	public void registerInput(String varName, RDD<String> rdd, String format, boolean hasHeader,
 			String delim, boolean fill, double fillValue, long rlen, long clen, long nnz) throws DMLRuntimeException {
 		registerInput(varName, rdd.toJavaRDD(), format, hasHeader, delim, fill, fillValue, -1, -1, -1);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Method for supplying csv file format properties along with dimensions or nnz
 	 * <p>
@@ -367,12 +401,12 @@ public class MLContext {
 	 * @param nnz
 	 * @throws DMLRuntimeException
 	 */
-	public void registerInput(String varName, JavaRDD<String> rdd, String format, boolean hasHeader, 
+	public void registerInput(String varName, JavaRDD<String> rdd, String format, boolean hasHeader,
 			String delim, boolean fill, double fillValue, long rlen, long clen, long nnz) throws DMLRuntimeException {
 		CSVFileFormatProperties props = new CSVFileFormatProperties(hasHeader, delim, fill, fillValue, "");
 		registerInput(varName, rdd.mapToPair(new ConvertStringToLongTextPair()), format, rlen, clen, nnz, props);
-	} 
-	
+	}
+
 	/**
 	 * Register CSV/Text as inputs: Convenience method without dimensions and nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
@@ -387,7 +421,7 @@ public class MLContext {
 	public void registerInput(String varName, RDD<String> rdd, String format) throws DMLRuntimeException {
 		registerInput(varName, rdd.toJavaRDD().mapToPair(new ConvertStringToLongTextPair()), format, -1, -1, -1, null);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Convenience method without dimensions and nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
@@ -402,13 +436,13 @@ public class MLContext {
 	public void registerInput(String varName, JavaRDD<String> rdd, String format) throws DMLRuntimeException {
 		registerInput(varName, rdd.mapToPair(new ConvertStringToLongTextPair()), format, -1, -1, -1, null);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Convenience method with dimensions and but no nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
 	 * Marks the variable in the DML script as input variable.
 	 * Note that this expects a "varName = read(...)" statement in the DML script which through non-MLContext invocation
-	 * would have been created by reading a HDFS file. 
+	 * would have been created by reading a HDFS file.
 	 * @param varName
 	 * @param rdd
 	 * @param format
@@ -419,7 +453,7 @@ public class MLContext {
 	public void registerInput(String varName, JavaRDD<String> rdd, String format, long rlen, long clen) throws DMLRuntimeException {
 		registerInput(varName, rdd.mapToPair(new ConvertStringToLongTextPair()), format, rlen, clen, -1, null);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: Convenience method with dimensions and but no nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
@@ -436,7 +470,7 @@ public class MLContext {
 	public void registerInput(String varName, RDD<String> rdd, String format, long rlen, long clen) throws DMLRuntimeException {
 		registerInput(varName, rdd.toJavaRDD().mapToPair(new ConvertStringToLongTextPair()), format, rlen, clen, -1, null);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: with dimensions and nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
@@ -454,7 +488,7 @@ public class MLContext {
 	public void registerInput(String varName, JavaRDD<String> rdd, String format, long rlen, long clen, long nnz) throws DMLRuntimeException {
 		registerInput(varName, rdd.mapToPair(new ConvertStringToLongTextPair()), format, rlen, clen, nnz, null);
 	}
-	
+
 	/**
 	 * Register CSV/Text as inputs: with dimensions and nnz. It uses default file properties (example: delim, fill, ..)
 	 * <p>
@@ -472,18 +506,18 @@ public class MLContext {
 	public void registerInput(String varName, RDD<String> rdd, String format, long rlen, long clen, long nnz) throws DMLRuntimeException {
 		registerInput(varName, rdd.toJavaRDD().mapToPair(new ConvertStringToLongTextPair()), format, rlen, clen, nnz, null);
 	}
-	
+
 	// All CSV related methods call this ... It provides access to dimensions, nnz, file properties.
 	private void registerInput(String varName, JavaPairRDD<LongWritable, Text> textOrCsv_rdd, String format, long rlen, long clen, long nnz, FileFormatProperties props) throws DMLRuntimeException {
 		if(!(DMLScript.rtplatform == RUNTIME_PLATFORM.SPARK || DMLScript.rtplatform == RUNTIME_PLATFORM.HYBRID_SPARK)) {
 			throw new DMLRuntimeException("The registerInput functionality only supported for spark runtime. Please use MLContext(sc) instead of default constructor.");
 		}
-		
+
 		if(_variables == null)
 			_variables = new LocalVariableMap();
 		if(_inVarnames == null)
 			_inVarnames = new ArrayList<String>();
-		
+
 		MatrixObject mo;
 		if( format.equals("csv") ) {
 			//TODO replace default block size
@@ -503,10 +537,10 @@ public class MLContext {
 			throw new DMLRuntimeException("Matrixmarket format is not yet implemented in registerInput: " + format);
 		}
 		else {
-			
+
 			throw new DMLRuntimeException("Incorrect format in registerInput: " + format);
 		}
-		
+
 		JavaPairRDD<LongWritable, Text> rdd = textOrCsv_rdd.mapToPair(new CopyTextInputFunction());
 		if(props != null)
 			mo.setFileFormatProperties(props);
@@ -515,17 +549,17 @@ public class MLContext {
 		_inVarnames.add(varName);
 		checkIfRegisteringInputAllowed();
 	}
-	
+
 	// ------------------------------------------------------------------------------------
-	
-	// 3. Binary blocked RDD: Support JavaPairRDD<MatrixIndexes,MatrixBlock> 
-	
+
+	// 3. Binary blocked RDD: Support JavaPairRDD<MatrixIndexes,MatrixBlock>
+
 	/**
 	 * Register binary blocked RDD with given dimensions, default block sizes and no nnz
 	 * <p>
 	 * Marks the variable in the DML script as input variable.
 	 * Note that this expects a "varName = read(...)" statement in the DML script which through non-MLContext invocation
-	 * would have been created by reading a HDFS file. 
+	 * would have been created by reading a HDFS file.
 	 * @param varName
 	 * @param rdd
 	 * @param rlen
@@ -536,7 +570,7 @@ public class MLContext {
 		//TODO replace default blocksize
 		registerInput(varName, rdd, rlen, clen, OptimizerUtils.DEFAULT_BLOCKSIZE, OptimizerUtils.DEFAULT_BLOCKSIZE);
 	}
-	
+
 	/**
 	 * Register binary blocked RDD with given dimensions, given block sizes and no nnz
 	 * <p>
@@ -554,8 +588,8 @@ public class MLContext {
 	public void registerInput(String varName, JavaPairRDD<MatrixIndexes,MatrixBlock> rdd, long rlen, long clen, int brlen, int bclen) throws DMLRuntimeException {
 		registerInput(varName, rdd, rlen, clen, brlen, bclen, -1);
 	}
-	
-	
+
+
 	/**
 	 * Register binary blocked RDD with given dimensions, given block sizes and given nnz (preferred).
 	 * <p>
@@ -575,11 +609,11 @@ public class MLContext {
 		if(rlen == -1 || clen == -1) {
 			throw new DMLRuntimeException("The metadata is required in registerInput for binary format");
 		}
-		
+
 		MatrixCharacteristics mc = new MatrixCharacteristics(rlen, clen, brlen, bclen, nnz);
 		registerInput(varName, rdd, mc);
 	}
-	
+
 	// All binary blocked method call this.
 	public void registerInput(String varName, JavaPairRDD<MatrixIndexes,MatrixBlock> rdd, MatrixCharacteristics mc) throws DMLRuntimeException {
 		if(_variables == null)
@@ -588,16 +622,16 @@ public class MLContext {
 			_inVarnames = new ArrayList<String>();
 		// Bug in Spark is messing up blocks and indexes due to too eager reuse of data structures
 		JavaPairRDD<MatrixIndexes, MatrixBlock> copyRDD = rdd.mapToPair( new CopyBlockPairFunction() );
-		
+
 		MatrixObject mo = new MatrixObject(ValueType.DOUBLE, "temp", new MatrixFormatMetaData(mc, OutputInfo.BinaryBlockOutputInfo, InputInfo.BinaryBlockInputInfo));
 		mo.setRDDHandle(new RDDObject(copyRDD, varName));
 		_variables.put(varName, mo);
 		_inVarnames.add(varName);
 		checkIfRegisteringInputAllowed();
 	}
-	
+
 	// =============================================================================================
-	
+
 	/**
 	 * Marks the variable in the DML script as output variable.
 	 * Note that this expects a "write(varName, ...)" statement in the DML script which through non-MLContext invocation
@@ -615,9 +649,9 @@ public class MLContext {
 		if(_variables == null)
 			_variables = new LocalVariableMap();
 	}
-	
+
 	// =============================================================================================
-	
+
 	/**
 	 * Execute DML script by passing named arguments using specified config file.
 	 * @param dmlScriptFilePath the dml script can be in local filesystem or in HDFS
@@ -626,7 +660,7 @@ public class MLContext {
 	 * @param configFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, Map<String, String> namedArgs, boolean parsePyDML, String configFilePath) throws IOException, DMLException, ParseException {
 		String [] args = new String[namedArgs.size()];
@@ -640,7 +674,7 @@ public class MLContext {
 		}
 		return compileAndExecuteScript(dmlScriptFilePath, args, true, parsePyDML, configFilePath);
 	}
-	
+
 	/**
 	 * Execute DML script by passing named arguments using specified config file.
 	 * @param dmlScriptFilePath the dml script can be in local filesystem or in HDFS
@@ -648,7 +682,7 @@ public class MLContext {
 	 * @param configFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, Map<String, String> namedArgs, String configFilePath) throws IOException, DMLException, ParseException {
 		String [] args = new String[namedArgs.size()];
@@ -660,22 +694,22 @@ public class MLContext {
 				args[i] = entry.getKey() + "=" + entry.getValue();
 			i++;
 		}
-		
+
 		return compileAndExecuteScript(dmlScriptFilePath, args, true, false, configFilePath);
 	}
-	
+
 	/**
 	 * Execute DML script by passing named arguments with default configuration.
 	 * @param dmlScriptFilePath the dml script can be in local filesystem or in HDFS
 	 * @param namedArgs
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, Map<String, String> namedArgs) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, namedArgs, false, null);
 	}
-	
+
 	/**
 	 * Execute DML script by passing named arguments.
 	 * @param dmlScriptFilePath
@@ -702,7 +736,7 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, Map<String, String> namedArgs, boolean parsePyDML) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, namedArgs, parsePyDML, null);
 	}
-	
+
 	/**
 	 * Experimental: Execute PyDML script by passing named arguments if parsePyDML=true.
 	 * @param dmlScriptFilePath
@@ -716,7 +750,7 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, scala.collection.immutable.Map<String, String> namedArgs, boolean parsePyDML) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, new HashMap<String, String>(scala.collection.JavaConversions.mapAsJavaMap(namedArgs)), parsePyDML);
 	}
-	
+
 	/**
 	 * Execute DML script by passing positional arguments using specified config file
 	 * @param dmlScriptFilePath
@@ -724,12 +758,12 @@ public class MLContext {
 	 * @param configFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, String [] args, String configFilePath) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, args, false, configFilePath);
 	}
-	
+
 	/**
 	 * Execute DML script by passing positional arguments using specified config file
 	 * This method is implemented for compatibility with Python MLContext.
@@ -740,26 +774,26 @@ public class MLContext {
 	 * @param configFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, ArrayList<String> args, String configFilePath) throws IOException, DMLException, ParseException {
 		String [] argsArr = new String[args.size()];
 		argsArr = args.toArray(argsArr);
 		return execute(dmlScriptFilePath, argsArr, false, configFilePath);
 	}
-	
+
 	/**
 	 * Execute DML script by passing positional arguments using default configuration
 	 * @param dmlScriptFilePath
 	 * @param args
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, String [] args) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, args, false, null);
 	}
-	
+
 	/**
 	 * Execute DML script by passing positional arguments using default configuration.
 	 * This method is implemented for compatibility with Python MLContext.
@@ -769,14 +803,14 @@ public class MLContext {
 	 * @param args
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, ArrayList<String> args) throws IOException, DMLException, ParseException {
 		String [] argsArr = new String[args.size()];
 		argsArr = args.toArray(argsArr);
 		return execute(dmlScriptFilePath, argsArr, false, null);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script by passing positional arguments if parsePyDML=true, using default configuration.
 	 * This method is implemented for compatibility with Python MLContext.
@@ -795,7 +829,7 @@ public class MLContext {
 		argsArr = args.toArray(argsArr);
 		return execute(dmlScriptFilePath, argsArr, parsePyDML, null);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script by passing positional arguments if parsePyDML=true, using specified config file.
 	 * This method is implemented for compatibility with Python MLContext.
@@ -815,7 +849,7 @@ public class MLContext {
 		argsArr = args.toArray(argsArr);
 		return execute(dmlScriptFilePath, argsArr, parsePyDML, configFilePath);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script by passing positional arguments if parsePyDML=true, using specified config file.
 	 * @param dmlScriptFilePath
@@ -830,7 +864,7 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, String [] args, boolean parsePyDML, String configFilePath) throws IOException, DMLException, ParseException {
 		return compileAndExecuteScript(dmlScriptFilePath, args, false, parsePyDML, configFilePath);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script by passing positional arguments if parsePyDML=true, using default configuration.
 	 * @param dmlScriptFilePath
@@ -844,30 +878,30 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, String [] args, boolean parsePyDML) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, args, parsePyDML, null);
 	}
-	
+
 	/**
 	 * Execute DML script without any arguments using specified config path
 	 * @param dmlScriptFilePath
 	 * @param configFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath, String configFilePath) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, false, configFilePath);
 	}
-	
+
 	/**
 	 * Execute DML script without any arguments using default configuration.
 	 * @param dmlScriptFilePath
 	 * @throws IOException
 	 * @throws DMLException
-	 * @throws ParseException 
+	 * @throws ParseException
 	 */
 	public MLOutput execute(String dmlScriptFilePath) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, false, null);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script without any arguments if parsePyDML=true, using specified config path.
 	 * @param dmlScriptFilePath
@@ -881,7 +915,7 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, boolean parsePyDML, String configFilePath) throws IOException, DMLException, ParseException {
 		return compileAndExecuteScript(dmlScriptFilePath, null, false, parsePyDML, configFilePath);
 	}
-	
+
 	/**
 	 * Experimental: Execute DML script without any arguments if parsePyDML=true, using default configuration.
 	 * @param dmlScriptFilePath
@@ -894,27 +928,27 @@ public class MLContext {
 	public MLOutput execute(String dmlScriptFilePath, boolean parsePyDML) throws IOException, DMLException, ParseException {
 		return execute(dmlScriptFilePath, parsePyDML, null);
 	}
-	
+
 	// -------------------------------- Utility methods begins ----------------------------------------------------------
-	
-	
+
+
 	/**
 	 * Call this method if you want to clear any RDDs set via registerInput, registerOutput.
-	 * This is required if ml.execute(..) has been called earlier and you want to call a new DML script. 
-	 * Note: By default this doesnot clean up configuration set using setConfig method. 
+	 * This is required if ml.execute(..) has been called earlier and you want to call a new DML script.
+	 * Note: By default this doesnot clean up configuration set using setConfig method.
 	 * To clean the configuration as along with registered input/outputs, please use reset(true);
-	 * @throws DMLRuntimeException 
+	 * @throws DMLRuntimeException
 	 */
-	public void reset() 
-			throws DMLRuntimeException 
+	public void reset()
+			throws DMLRuntimeException
 	{
 		reset(false);
 	}
-	
-	public void reset(boolean cleanupConfig) 
-			throws DMLRuntimeException 
+
+	public void reset(boolean cleanupConfig)
+			throws DMLRuntimeException
 	{
-		//cleanup variables from bufferpool, incl evicted files 
+		//cleanup variables from bufferpool, incl evicted files
 		//(otherwise memory leak because bufferpool holds references)
 		CacheableData.cleanupCacheDir();
 
@@ -925,22 +959,22 @@ public class MLContext {
 		if(cleanupConfig)
 			_additionalConfigs.clear();
 	}
-	
+
 	/**
 	 * Used internally
 	 * @param source
 	 * @param target
 	 * @throws LanguageException
 	 */
-	void setAppropriateVarsForRead(Expression source, String target) 
-		throws LanguageException 
+	void setAppropriateVarsForRead(Expression source, String target)
+		throws LanguageException
 	{
 		boolean isTargetRegistered = isRegisteredAsInput(target);
 		boolean isReadExpression = (source instanceof DataExpression && ((DataExpression) source).isRead());
 		if(isTargetRegistered && isReadExpression) {
-			// Do not check metadata file for registered reads 
+			// Do not check metadata file for registered reads
 			((DataExpression) source).setCheckMetadata(false);
-			
+
 			MatrixObject mo = null;
 			try {
 				mo = getMatrixObject(target);
@@ -951,7 +985,7 @@ public class MLContext {
 				((DataExpression) source).addVarParam(DataExpression.READNUMNONZEROPARAM, new IntIdentifier(mo.getNnz(), source.getFilename(), blp, bcp, elp, ecp));
 				((DataExpression) source).addVarParam(DataExpression.DATATYPEPARAM, new StringIdentifier("matrix", source.getFilename(), blp, bcp, elp, ecp));
 				((DataExpression) source).addVarParam(DataExpression.VALUETYPEPARAM, new StringIdentifier("double", source.getFilename(), blp, bcp, elp, ecp));
-				
+
 				if(mo.getMetaData() instanceof MatrixFormatMetaData) {
 					MatrixFormatMetaData metaData = (MatrixFormatMetaData) mo.getMetaData();
 					if(metaData.getOutputInfo() == OutputInfo.CSVOutputInfo) {
@@ -974,7 +1008,7 @@ public class MLContext {
 			}
 		}
 	}
-	
+
 	/**
 	 * Used internally
 	 * @param tmp
@@ -984,22 +1018,22 @@ public class MLContext {
 		String [] outputs = (_outVarnames != null) ? _outVarnames.toArray(new String[0]) : new String[0];
 		return JMLCUtils.cleanupRuntimeInstructions(tmp, outputs);
 	}
-	
+
 	// -------------------------------- Utility methods ends ----------------------------------------------------------
-		
-	
+
+
 	// -------------------------------- Experimental API begins ----------------------------------------------------------
 	/**
 	 * Experimental api:
 	 * Setting monitorPerformance to true adds additional overhead of storing state. So, use it only if necessary.
 	 * @param sc
 	 * @param monitorPerformance
-	 * @throws DMLRuntimeException 
+	 * @throws DMLRuntimeException
 	 */
 	public MLContext(SparkContext sc, boolean monitorPerformance) throws DMLRuntimeException {
 		initializeSpark(sc, monitorPerformance, false);
 	}
-	
+
 	/**
 	 * Experimental api:
 	 * Setting monitorPerformance to true adds additional overhead of storing state. So, use it only if necessary.
@@ -1010,7 +1044,7 @@ public class MLContext {
 	public MLContext(JavaSparkContext sc, boolean monitorPerformance) throws DMLRuntimeException {
 		initializeSpark(sc.sc(), monitorPerformance, false);
 	}
-	
+
 	/**
 	 * Experimental api:
 	 * Setting monitorPerformance to true adds additional overhead of storing state. So, use it only if necessary.
@@ -1022,7 +1056,7 @@ public class MLContext {
 	public MLContext(SparkContext sc, boolean monitorPerformance, boolean setForcedSparkExecType) throws DMLRuntimeException {
 		initializeSpark(sc, monitorPerformance, setForcedSparkExecType);
 	}
-	
+
 	/**
 	 * Experimental api:
 	 * Setting monitorPerformance to true adds additional overhead of storing state. So, use it only if necessary.
@@ -1034,9 +1068,9 @@ public class MLContext {
 	public MLContext(JavaSparkContext sc, boolean monitorPerformance, boolean setForcedSparkExecType) throws DMLRuntimeException {
 		initializeSpark(sc.sc(), monitorPerformance, setForcedSparkExecType);
 	}
-	
+
 	// -------------------------------- Experimental API ends ----------------------------------------------------------
-	
+
 	// -------------------------------- Private methods begins ----------------------------------------------------------
 	private boolean isRegisteredAsInput(String varName) {
 		if(_inVarnames != null) {
@@ -1048,7 +1082,7 @@ public class MLContext {
 		}
 		return false;
 	}
-	
+
 	private MatrixObject getMatrixObject(String varName) throws DMLRuntimeException {
 		if(_variables != null) {
 			Data mo = _variables.get(varName);
@@ -1061,8 +1095,8 @@ public class MLContext {
 		}
 		throw new DMLRuntimeException("ERROR: getMatrixObject not set for variable:" + varName);
 	}
-	
-	
+
+
 	private int compareVersion(String versionStr1, String versionStr2) {
 		Scanner s1 = null;
 		Scanner s2 = null;
@@ -1078,36 +1112,36 @@ public class MLContext {
 			        return 1;
 			    }
 			}
-	
+
 			if(s1.hasNextInt()) return 1;
 		}
 		finally {
 			if(s1 != null) s1.close();
 			if(s2 != null) s2.close();
 		}
-		
+
 		return 0;
 	}
-	
+
 	private void initializeSpark(SparkContext sc, boolean monitorPerformance, boolean setForcedSparkExecType) throws DMLRuntimeException {
 		MLContextProxy.setActive(true);
-		
+
 		this._sc = sc;
-		
+
 		if(compareVersion(sc.version(), "1.3.0")  < 0 ) {
 			throw new DMLRuntimeException("Expected spark version >= 1.3.0 for running SystemML");
 		}
-		
+
 		if(setForcedSparkExecType)
 			DMLScript.rtplatform = RUNTIME_PLATFORM.SPARK;
 		else
 			DMLScript.rtplatform = RUNTIME_PLATFORM.HYBRID_SPARK;
-		
+
 		if(monitorPerformance) {
 			initializeSparkListener(sc);
 		}
 	}
-	
+
 	private void initializeSparkListener(SparkContext sc) throws DMLRuntimeException {
 		if(compareVersion(sc.version(), "1.4.0")  < 0 ) {
 			throw new DMLRuntimeException("Expected spark version >= 1.4.0 for monitoring MLContext performance");
@@ -1116,7 +1150,7 @@ public class MLContext {
 		_monitorUtils = new SparkMonitoringUtil(sparkListener);
 		sc.addSparkListener(sparkListener);
 	}
-	
+
 	/**
 	 * Execute a script stored in a string.
 	 *
@@ -1200,11 +1234,11 @@ public class MLContext {
 			throw new DMLRuntimeException("ERROR: registerInput is only allowed for spark execution mode");
 		}
 	}
-	
+
 	private MLOutput compileAndExecuteScript(String dmlScriptFilePath, String [] args, boolean isNamedArgument, boolean isPyDML, String configFilePath) throws IOException, DMLException {
 		return compileAndExecuteScript(dmlScriptFilePath, args, true, isNamedArgument, isPyDML, configFilePath);
 	}
-	
+
 	/**
 	 * All the execute() methods call this, which  after setting appropriate input/output variables
 	 * calls _compileAndExecuteScript
@@ -1223,19 +1257,19 @@ public class MLContext {
 				throw new DMLRuntimeException("SystemML (and hence by definition MLContext) doesnot support parallel execute() calls from same or different MLContexts. "
 						+ "As a temporary fix, please do explicit synchronization, i.e. synchronized(MLContext.class) { ml.execute(...) } ");
 			}
-			
+
 			// Set active MLContext.
 			_activeMLContext = this;
-			
+
 			if(_monitorUtils != null) {
 				_monitorUtils.resetMonitoringData();
 			}
-			
+
 			if(DMLScript.rtplatform == RUNTIME_PLATFORM.SPARK || DMLScript.rtplatform == RUNTIME_PLATFORM.HYBRID_SPARK) {
-				
 				Map<String, JavaPairRDD<MatrixIndexes,MatrixBlock>> retVal = null;
-				
-				// Depending on whether registerInput/registerOutput was called initialize the variables 
+				Map<String, ScalarObject> scalarObjects = null;
+
+				// Depending on whether registerInput/registerOutput was called initialize the variables
 				String[] inputs; String[] outputs;
 				if(_inVarnames != null) {
 					inputs = _inVarnames.toArray(new String[0]);
@@ -1250,56 +1284,64 @@ public class MLContext {
 					outputs = new String[0];
 				}
 				Map<String, MatrixCharacteristics> outMetadata = new HashMap<String, MatrixCharacteristics>();
-				
+
 				Map<String, String> argVals = DMLScript.createArgumentsMap(isNamedArgument, args);
-				
+
 				// Run the DML script
 				ExecutionContext ec = executeUsingSimplifiedCompilationChain(dmlScriptFilePath, isFile, argVals, isPyDML, inputs, outputs, _variables, configFilePath);
-				
+
 				// Now collect the output
 				if(_outVarnames != null) {
 					if(_variables == null) {
 						throw new DMLRuntimeException("The symbol table returned after executing the script is empty");
 					}
-					
+
 					for( String ovar : _outVarnames ) {
 						if( _variables.keySet().contains(ovar) ) {
 							if(retVal == null) {
 								retVal = new HashMap<String, JavaPairRDD<MatrixIndexes,MatrixBlock>>();
 							}
-							retVal.put(ovar, ((SparkExecutionContext) ec).getBinaryBlockRDDHandleForVariable(ovar));
-							outMetadata.put(ovar, ec.getMatrixCharacteristics(ovar)); // For converting output to dataframe
+							if (scalarObjects == null){
+								scalarObjects = new HashMap<String, ScalarObject>();
+							}
+							Data data = _variables.get(ovar);
+							if (data instanceof ScalarObject){
+								scalarObjects.put(ovar, (ScalarObject)data);
+							} else if (data instanceof MatrixObject) {
+								retVal.put(ovar, ((SparkExecutionContext) ec).getBinaryBlockRDDHandleForVariable(ovar));
+								outMetadata.put(ovar, ec.getMatrixCharacteristics(ovar)); // For converting output to dataframe
+							}
 						}
 						else {
 							throw new DMLException("Error: The variable " + ovar + " is not available as output after the execution of the DMLScript.");
 						}
 					}
 				}
-				
-				return new MLOutput(retVal, outMetadata);
+
+				return new MLOutput(retVal, outMetadata, scalarObjects);
 			}
 			else {
 				throw new DMLRuntimeException("Unsupported runtime:" + DMLScript.rtplatform.name());
 			}
-		
+
 		}
 		finally {
 			// Remove global dml config and all thread-local configs
-			// TODO enable cleanup whenever invalid GNMF MLcontext is fixed 
+			// TODO enable cleanup whenever invalid GNMF MLcontext is fixed
 			// (the test is invalid because it assumes that status of previous execute is kept)
 			//ConfigurationManager.setGlobalConfig(new DMLConfig());
 			//ConfigurationManager.clearLocalConfigs();
-			
+
 			// Reset active MLContext.
-			_activeMLContext = null;	
+			_activeMLContext = null;
 		}
 	}
-	
-	
+
+
 	/**
 	 * This runs the DML script and returns the ExecutionContext for the caller to extract the output variables.
 	 * The caller (which is compileAndExecuteScript) is expected to set inputSymbolTable with appropriate matrix representation (RDD, MatrixObject).
-	 * 
+	 *
 	 * @param dmlScriptFilePath
 	 * @param isFile
 	 * @param argVals
@@ -1313,8 +1355,8 @@ public class MLContext {
 	 * @throws DMLException
 	 * @throws ParseException
 	 */
-	private ExecutionContext executeUsingSimplifiedCompilationChain(String dmlScriptFilePath, boolean isFile, Map<String, String> argVals, boolean parsePyDML, 
-			String[] inputs, String[] outputs, LocalVariableMap inputSymbolTable, String configFilePath) 
+	private ExecutionContext executeUsingSimplifiedCompilationChain(String dmlScriptFilePath, boolean isFile, Map<String, String> argVals, boolean parsePyDML,
+			String[] inputs, String[] outputs, LocalVariableMap inputSymbolTable, String configFilePath)
 		throws IOException, DMLException
 	{
 		//construct dml configuration
@@ -1322,7 +1364,7 @@ public class MLContext {
 		for(Entry<String, String> param : _additionalConfigs.entrySet()) {
 			config.setTextValue(param.getKey(), param.getValue());
 		}
-		
+
 		//set global dml and specialized compiler configurations
 		ConfigurationManager.setGlobalConfig(config);
 		CompilerConfig cconf = new CompilerConfig();
@@ -1330,16 +1372,16 @@ public class MLContext {
 		cconf.set(ConfigType.REJECT_READ_WRITE_UNKNOWNS, false);
 		cconf.set(ConfigType.ALLOW_CSE_PERSISTENT_READS, false);
 		ConfigurationManager.setGlobalConfig(cconf);
-		
+
 		//read dml script string
 		String dmlScriptStr = DMLScript.readDMLScript( isFile?"-f":"-s", dmlScriptFilePath);
 		if(_monitorUtils != null) {
 			_monitorUtils.setDMLString(dmlScriptStr);
 		}
-		
+
 		//simplified compilation chain
 		_rtprog = null;
-		
+
 		//parsing
 		AParserWrapper parser = AParserWrapper.createParser(parsePyDML);
 		DMLProgram prog;
@@ -1348,63 +1390,63 @@ public class MLContext {
 		} else {
 			prog = parser.parse(null, dmlScriptStr, argVals);
 		}
-		
+
 		//language validate
 		DMLTranslator dmlt = new DMLTranslator(prog);
-		dmlt.liveVariableAnalysis(prog);			
+		dmlt.liveVariableAnalysis(prog);
 		dmlt.validateParseTree(prog);
-		
+
 		//hop construct/rewrite
 		dmlt.constructHops(prog);
 		dmlt.rewriteHopsDAG(prog);
-		
+
 		Explain.explain(prog);
-		
+
 		//rewrite persistent reads/writes
 		if(inputSymbolTable != null) {
 			RewriteRemovePersistentReadWrite rewrite = new RewriteRemovePersistentReadWrite(inputs, outputs);
 			ProgramRewriter rewriter2 = new ProgramRewriter(rewrite);
 			rewriter2.rewriteProgramHopDAGs(prog);
 		}
-		
+
 		//lop construct and runtime prog generation
 		dmlt.constructLops(prog);
 		_rtprog = prog.getRuntimeProgram(config);
-		
+
 		//optional global data flow optimization
 		if(OptimizerUtils.isOptLevel(OptimizationLevel.O4_GLOBAL_TIME_MEMORY) ) {
 			_rtprog = GlobalOptimizerWrapper.optimizeProgram(prog, _rtprog);
 		}
-		
+
 		// launch SystemML appmaster not required as it is already launched
-		
-		//count number compiled MR jobs / SP instructions	
+
+		//count number compiled MR jobs / SP instructions
 		ExplainCounts counts = Explain.countDistributedOperations(_rtprog);
 		Statistics.resetNoOfCompiledJobs( counts.numJobs );
-		
+
 		// Initialize caching and scratch space
 		DMLScript.initHadoopExecution(config);
-		
+
 		//final cleanup runtime prog
 		JMLCUtils.cleanupRuntimeProgram(_rtprog, outputs);
-				
+
 		//create and populate execution context
 		ExecutionContext ec = ExecutionContextFactory.createContext(_rtprog);
 		if(inputSymbolTable != null) {
 			ec.setVariables(inputSymbolTable);
 		}
-		
-		//core execute runtime program	
+
+		//core execute runtime program
 		_rtprog.execute( ec );
-		
+
 		if(_monitorUtils != null)
 			_monitorUtils.setExplainOutput(Explain.explain(_rtprog));
-		
+
 		return ec;
 	}
-	
+
 	// -------------------------------- Private methods ends ----------------------------------------------------------
-	
+
 	// TODO: Add additional create to provide sep, missing values, etc. for CSV
 	/**
 	 * Experimental API: Might be discontinued in future release
@@ -1424,7 +1466,7 @@ public class MLContext {
 		MatrixCharacteristics mcOut = out.getMatrixCharacteristics("output");
 		return MLMatrix.createMLMatrix(this, sqlContext, blocks, mcOut);
 	}
-	
+
 //	// TODO: Test this in different scenarios: sparse/dense/mixed
 //	/**
 //	 * Experimental unstable API: Might be discontinued in future release
@@ -1436,7 +1478,7 @@ public class MLContext {
 //	 */
 //	public MLMatrix read(SQLContext sqlContext, BlockMatrix mllibMatrix) throws DMLRuntimeException {
 //		long nnz = -1; // TODO: Find number of non-zeros from mllibMatrix ... This is important !!
-//		
+//
 //		JavaPairRDD<Tuple2<Object, Object>, Matrix> mllibBlocks = JavaPairRDD.fromJavaRDD(mllibMatrix.blocks().toJavaRDD());
 //		long rlen = mllibMatrix.numRows(); long clen = mllibMatrix.numCols();
 //		int brlen = mllibMatrix.numRowBlocks();
@@ -1445,12 +1487,12 @@ public class MLContext {
 //			System.err.println("WARNING: Since the block size of mllib matrix is not " + DMLTranslator.DMLBlockSize + ", it may cause "
 //					+ "reblocks");
 //		}
-//		
+//
 //		JavaPairRDD<MatrixIndexes, MatrixBlock> blocks = mllibBlocks
 //				.mapToPair(new ConvertMLLibBlocksToBinaryBlocks(rlen, clen, brlen, bclen));
-//		
+//
 //		MatrixCharacteristics mc = new MatrixCharacteristics(rlen, clen, brlen, bclen, nnz);
 //		return MLMatrix.createMLMatrix(this, sqlContext, blocks, mc);
 //	}
-	
+
 }

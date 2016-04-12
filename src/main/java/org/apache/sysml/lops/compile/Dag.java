@@ -2490,7 +2490,8 @@ public class Dag<N extends Lop>
 			
 			if ( node.getDataType() == DataType.SCALAR ) {
 				// generate assignment operations for final and transient writes
-				if ( oparams.getFile_name() == null && !(node instanceof Data && ((Data)node).isPersistentWrite()) ) {
+				if ( (oparams.getFile_name() == null || oparams.getFile_name().trim().isEmpty())
+								&& !(node instanceof Data && ((Data)node).isPersistentWrite()) ) {
 					String io_inst = prepareAssignVarInstruction(node.getInputs().get(0), node);
 					CPInstruction currInstr = CPInstructionParser.parseSingleInstruction(io_inst);
 					

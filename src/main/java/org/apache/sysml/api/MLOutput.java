@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -39,6 +39,11 @@ import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 import org.apache.sysml.runtime.DMLRuntimeException;
+import org.apache.sysml.runtime.instructions.cp.BooleanObject;
+import org.apache.sysml.runtime.instructions.cp.DoubleObject;
+import org.apache.sysml.runtime.instructions.cp.IntObject;
+import org.apache.sysml.runtime.instructions.cp.ScalarObject;
+import org.apache.sysml.runtime.instructions.cp.StringObject;
 import org.apache.sysml.runtime.instructions.spark.functions.GetMLBlock;
 import org.apache.sysml.runtime.instructions.spark.utils.RDDConverterUtilsExt;
 import org.apache.sysml.runtime.matrix.MatrixCharacteristics;
@@ -49,35 +54,84 @@ import org.apache.sysml.runtime.util.UtilFunctions;
 import scala.Tuple2;
 
 /**
- * This is a simple container object that returns the output of execute from MLContext 
+ * This is a simple container object that returns the output of execute from MLContext
  *
  */
 public class MLOutput {
-	
-	
-	
+
+	Map<String, ScalarObject> _outputScalars;
 	Map<String, JavaPairRDD<MatrixIndexes,MatrixBlock>> _outputs;
 	private Map<String, MatrixCharacteristics> _outMetadata = null;
-	
-	public MLOutput(Map<String, JavaPairRDD<MatrixIndexes,MatrixBlock>> outputs, Map<String, MatrixCharacteristics> outMetadata) {
+
+	public MLOutput(Map<String, JavaPairRDD<MatrixIndexes,MatrixBlock>> outputs, Map<String, MatrixCharacteristics> outMetadata, Map<String, ScalarObject> outputScalars) {
 		this._outputs = outputs;
 		this._outMetadata = outMetadata;
+		this._outputScalars = outputScalars;
 	}
-	
+
+	public double getDouble(String varName) throws DMLRuntimeException {
+		if (_outputScalars.containsKey(varName)){
+			ScalarObject sobj = _outputScalars.get(varName);
+			if (sobj instanceof DoubleObject){
+				return sobj.getDoubleValue();
+			} else {
+				throw new DMLRuntimeException("Variable " + varName + " not of type double.");
+			}
+		}
+		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
+	}
+
+	public String getString(String varName) throws DMLRuntimeException {
+		if (_outputScalars.containsKey(varName)){
+			ScalarObject sobj = _outputScalars.get(varName);
+			if (sobj instanceof StringObject){
+				return sobj.getStringValue();
+			} else {
+				throw new DMLRuntimeException("Variable " + varName + " not of type string.");
+			}
+		}
+		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
+	}
+
+	public Long getInt(String varName) throws DMLRuntimeException {
+		if (_outputScalars.containsKey(varName)){
+			ScalarObject sobj = _outputScalars.get(varName);
+			if (sobj instanceof IntObject){
+				return sobj.getLongValue();
+			} else {
+				throw new DMLRuntimeException("Variable " + varName + " not of type integer.");
+			}
+		}
+		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
+	}
+
+	public Boolean getBoolean(String varName) throws DMLRuntimeException {
+		if (_outputScalars.containsKey(varName)){
+			ScalarObject sobj = _outputScalars.get(varName);
+			if (sobj instanceof BooleanObject){
+				return sobj.getBooleanValue();
+			} else {
+				throw new DMLRuntimeException("Variable " + varName + " not of type boolean.");
+			}
+		}
+		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
+	}
+
+
 	public JavaPairRDD<MatrixIndexes,MatrixBlock> getBinaryBlockedRDD(String varName) throws DMLRuntimeException {
 		if(_outputs.containsKey(varName)) {
 			return _outputs.get(varName);
 		}
 		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
 	}
-	
+
 	public MatrixCharacteristics getMatrixCharacteristics(String varName) throws DMLRuntimeException {
 		if(_outputs.containsKey(varName)) {
 			return _outMetadata.get(varName);
 		}
 		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
 	}
-	
+
 	/**
 	 * Note, the output DataFrame has an additional column ID.
 	 * An easy way to get DataFrame without ID is by df.sort("ID").drop("ID")
@@ -97,9 +151,9 @@ public class MLOutput {
 		}
 		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
 	}
-	
+
 	/**
-	 * 
+	 *
 	 * @param sqlContext
 	 * @param varName
 	 * @param outputVector if true, returns DataFrame with two column: ID and org.apache.spark.mllib.linalg.Vector
@@ -121,9 +175,9 @@ public class MLOutput {
 		else {
 			return getDF(sqlContext, varName);
 		}
-		
+
 	}
-	
+
 	/**
 	 * This methods improves the performance of MLPipeline wrappers.
 	 * @param sqlContext
@@ -143,12 +197,12 @@ public class MLOutput {
 		MatrixCharacteristics mc = _outMetadata.get(varName);
 		long rlen = mc.getRows(); long clen = mc.getCols();
 		int brlen = mc.getRowsPerBlock(); int bclen = mc.getColsPerBlock();
-		
+
 		ArrayList<Tuple2<String, Tuple2<Long, Long>>> alRange = new ArrayList<Tuple2<String, Tuple2<Long, Long>>>();
 		for(Entry<String, Tuple2<Long, Long>> e : range.entrySet()) {
 			alRange.add(new Tuple2<String, Tuple2<Long,Long>>(e.getKey(), e.getValue()));
 		}
-		
+
 		// Very expensive operation here: groupByKey (where number of keys might be too large)
 		JavaRDD<Row> rowsRDD = binaryBlockRDD.flatMapToPair(new ProjectRows(rlen, clen, brlen, bclen))
 				.groupByKey().map(new ConvertDoubleArrayToRangeRows(clen, bclen, alRange));
@@ -157,7 +211,7 @@ public class MLOutput {
 		if(numColumns <= 0) {
 			throw new DMLRuntimeException("Output dimensions unknown after executing the script and hence cannot create the dataframe");
 		}
-		
+
 		List<StructField> fields = new ArrayList<StructField>();
 		// LongTypes throw an error: java.lang.Double incompatible with java.lang.Long
 		fields.add(DataTypes.createStructField("ID", DataTypes.DoubleType, false));
@@ -170,26 +224,26 @@ public class MLOutput {
 			else
 				fields.add(DataTypes.createStructField(colName, DataTypes.DoubleType, false));
 		}
-		
+
 		// This will cause infinite recursion due to bug in Spark
 		// https://issues.apache.org/jira/browse/SPARK-6999
 		// return sqlContext.createDataFrame(rowsRDD, colNames); // where ArrayList<String> colNames
 		return sqlContext.createDataFrame(rowsRDD.rdd(), DataTypes.createStructType(fields));
-		
+
 	}
-	
+
 	public JavaRDD<String> getStringRDD(String varName, String format) throws DMLRuntimeException {
 		if(format.equals("text")) {
 			JavaPairRDD<MatrixIndexes, MatrixBlock> binaryRDD = getBinaryBlockedRDD(varName);
-			MatrixCharacteristics mcIn = getMatrixCharacteristics(varName); 
+			MatrixCharacteristics mcIn = getMatrixCharacteristics(varName);
 			return RDDConverterUtilsExt.binaryBlockToStringRDD(binaryRDD, mcIn, format);
 		}
 		else {
 			throw new DMLRuntimeException("The output format:" + format + " is not implemented yet.");
 		}
-		
+
 	}
-	
+
 	public MLMatrix getMLMatrix(MLContext ml, SQLContext sqlContext, String varName) throws DMLRuntimeException {
 		if(sqlContext == null) {
 			throw new DMLRuntimeException("SQLContext is not created.");
@@ -205,16 +259,16 @@ public class MLOutput {
 		}
 		throw new DMLRuntimeException("Variable " + varName + " not found in the output symbol table.");
 	}
-	
+
 //	/**
 //	 * Experimental: Please use this with caution as it will fail in many corner cases.
 //	 * @return org.apache.spark.mllib.linalg.distributed.BlockMatrix
-//	 * @throws DMLRuntimeException 
+//	 * @throws DMLRuntimeException
 //	 */
 //	public BlockMatrix getMLLibBlockedMatrix(MLContext ml, SQLContext sqlContext, String varName) throws DMLRuntimeException {
 //		return getMLMatrix(ml, sqlContext, varName).toBlockedMatrix();
 //	}
-	
+
 	public static class ProjectRows implements PairFlatMapFunction<Tuple2<MatrixIndexes,MatrixBlock>, Long, Tuple2<Long, Double[]>> {
 		private static final long serialVersionUID = -4792573268900472749L;
 		long rlen; long clen;
@@ -229,7 +283,7 @@ public class MLOutput {
 		@Override
 		public Iterable<Tuple2<Long, Tuple2<Long, Double[]>>> call(Tuple2<MatrixIndexes, MatrixBlock> kv) throws Exception {
 			// ------------------------------------------------------------------
-    		//	Compute local block size: 
+    		//	Compute local block size:
     		// Example: For matrix: 1500 X 1100 with block length 1000 X 1000
     		// We will have four local block sizes (1000X1000, 1000X100, 500X1000 and 500X1000)
     		long blockRowIndex = kv._1.getRowIndex();
@@ -237,7 +291,7 @@ public class MLOutput {
     		int lrlen = UtilFunctions.computeBlockSize(rlen, blockRowIndex, brlen);
     		int lclen = UtilFunctions.computeBlockSize(clen, blockColIndex, bclen);
     		// ------------------------------------------------------------------
-			
+
 			long startRowIndex = (kv._1.getRowIndex()-1) * bclen;
 			MatrixBlock blk = kv._2;
 			ArrayList<Tuple2<Long, Tuple2<Long, Double[]>>> retVal = new ArrayList<Tuple2<Long,Tuple2<Long,Double[]>>>();
@@ -251,10 +305,10 @@ public class MLOutput {
 			return retVal;
 		}
 	}
-	
+
 	public static class ConvertDoubleArrayToRows implements Function<Tuple2<Long, Iterable<Tuple2<Long, Double[]>>>, Row> {
 		private static final long serialVersionUID = 4441184411670316972L;
-		
+
 		int bclen; long clen;
 		boolean outputVector;
 		public ConvertDoubleArrayToRows(long clen, int bclen, boolean outputVector) {
@@ -266,25 +320,25 @@ public class MLOutput {
 		@Override
 		public Row call(Tuple2<Long, Iterable<Tuple2<Long, Double[]>>> arg0)
 				throws Exception {
-			
+
 			HashMap<Long, Double[]> partialRows = new HashMap<Long, Double[]>();
 			int sizeOfPartialRows = 0;
 			for(Tuple2<Long, Double[]> kv : arg0._2) {
 				partialRows.put(kv._1, kv._2);
 				sizeOfPartialRows += kv._2.length;
 			}
-			
+
 			// Insert first row as row index
 			Object[] row = null;
 			if(outputVector) {
 				row = new Object[2];
 				double [] vecVals = new double[sizeOfPartialRows];
-				
+
 				for(long columnBlockIndex = 1; columnBlockIndex <= partialRows.size(); columnBlockIndex++) {
 					if(partialRows.containsKey(columnBlockIndex)) {
 						Double [] array = partialRows.get(columnBlockIndex);
 						// ------------------------------------------------------------------
-						//	Compute local block size: 
+						//	Compute local block size:
 						int lclen = UtilFunctions.computeBlockSize(clen, columnBlockIndex, bclen);
 						// ------------------------------------------------------------------
 						if(array.length != lclen) {
@@ -298,7 +352,7 @@ public class MLOutput {
 						throw new Exception("The block for column index " + columnBlockIndex + " is missing. Make sure the last instruction is not returning empty blocks");
 					}
 				}
-				
+
 				long rowIndex = arg0._1;
 				row[0] = (double) rowIndex;
 				row[1] = new DenseVector(vecVals); // breeze.util.JavaArrayOps.arrayDToDv(vecVals);
@@ -311,7 +365,7 @@ public class MLOutput {
 					if(partialRows.containsKey(columnBlockIndex)) {
 						Double [] array = partialRows.get(columnBlockIndex);
 						// ------------------------------------------------------------------
-						//	Compute local block size: 
+						//	Compute local block size:
 						int lclen = UtilFunctions.computeBlockSize(clen, columnBlockIndex, bclen);
 						// ------------------------------------------------------------------
 						if(array.length != lclen) {
@@ -330,11 +384,11 @@ public class MLOutput {
 			return RowFactory.create(row_fields);
 		}
 	}
-	
-	
+
+
 	public static class ConvertDoubleArrayToRangeRows implements Function<Tuple2<Long, Iterable<Tuple2<Long, Double[]>>>, Row> {
 		private static final long serialVersionUID = 4441184411670316972L;
-		
+
 		int bclen; long clen;
 		ArrayList<Tuple2<String, Tuple2<Long, Long>>> range;
 		public ConvertDoubleArrayToRangeRows(long clen, int bclen, ArrayList<Tuple2<String, Tuple2<Long, Long>>> range) {
@@ -346,24 +400,24 @@ public class MLOutput {
 		@Override
 		public Row call(Tuple2<Long, Iterable<Tuple2<Long, Double[]>>> arg0)
 				throws Exception {
-			
+
 			HashMap<Long, Double[]> partialRows = new HashMap<Long, Double[]>();
 			int sizeOfPartialRows = 0;
 			for(Tuple2<Long, Double[]> kv : arg0._2) {
 				partialRows.put(kv._1, kv._2);
 				sizeOfPartialRows += kv._2.length;
 			}
-			
+
 			// Insert first row as row index
 			Object[] row = new Object[range.size() + 1];
-			
+
 			double [] vecVals = new double[sizeOfPartialRows];
-			
+
 			for(long columnBlockIndex = 1; columnBlockIndex <= partialRows.size(); columnBlockIndex++) {
 				if(partialRows.containsKey(columnBlockIndex)) {
 					Double [] array = partialRows.get(columnBlockIndex);
 					// ------------------------------------------------------------------
-					//	Compute local block size: 
+					//	Compute local block size:
 					int lclen = UtilFunctions.computeBlockSize(clen, columnBlockIndex, bclen);
 					// ------------------------------------------------------------------
 					if(array.length != lclen) {
@@ -377,21 +431,21 @@ public class MLOutput {
 					throw new Exception("The block for column index " + columnBlockIndex + " is missing. Make sure the last instruction is not returning empty blocks");
 				}
 			}
-			
+
 			long rowIndex = arg0._1;
 			row[0] = (double) rowIndex;
-			
+
 			int i = 1;
-			
+
 			//for(Entry<String, Tuple2<Long, Long>> e : range.entrySet()) {
 			for(int k = 0; k < range.size(); k++) {
 				long low = range.get(k)._2._1;
 				long high = range.get(k)._2._2;
-				
+
 				if(high < low) {
 					throw new Exception("Incorrect range:" + high + "<" + low);
 				}
-				
+
 				if(low == high) {
 					row[i] = vecVals[(int) (low - 1)];
 				}
@@ -403,7 +457,7 @@ public class MLOutput {
 					}
 					row[i] = new DenseVector(tempVector);
 				}
-				
+
 				i++;
 			}
 

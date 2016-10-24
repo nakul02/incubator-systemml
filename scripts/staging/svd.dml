@@ -1,0 +1,28 @@
+# q = number of blocks
+# X = input matrix of shapr r * c
+
+c = ncol(X)
+r = nrow(X)
+Ni = as.integer(c/q)
+if (Ni < r) {
+  print("q too small")
+}
+B = matrix(0, rows=r, cols=r*q)
+
+parfor (i in 1:q, check=0) {
+  c1 = 1+(i-1)*Ni
+  c2 = i*Ni
+  # TODO check if the last matrix is just one colum
+  if (c2 > c) {
+    c2 = c
+  }
+
+  Xi = X[,c1:c2]
+  [Ui, Si, Vi] = svd(Xi)
+  USi = Ui %*% diag(Si)
+  B[,1+(i-1)*r:i*r] = USi
+}
+
+[U, S, temp] = svd(B)
+# U = matrix(0, rows=r, cols=r)
+# S = matrix(0, rows=r, cols=1)

@@ -82,3 +82,4 @@ if (computeU) {
   # TODO add default value for computeU somehow
   U = X %*% V %*% diag(1/S)
 }
+

@@ -66,7 +66,6 @@ SingularValueDecomposition = function(matrix[double] X, int q)
     if (c2 > c) {
       c2 = c
     }
-
     Xi = Xt[,c1:c2]
     [Ui, Si, Vi] = svd(Xi)
     USi = Ui %*% diag(Si)
@@ -82,4 +81,3 @@ if (computeU) {
   # TODO add default value for computeU somehow
   U = X %*% V %*% diag(1/S)
 }
-

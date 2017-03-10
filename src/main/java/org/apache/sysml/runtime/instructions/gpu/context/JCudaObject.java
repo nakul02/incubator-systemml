@@ -18,6 +18,7 @@
  */
 package org.apache.sysml.runtime.instructions.gpu.context;
 
+import jcuda.CudaException;
 import jcuda.Pointer;
 import jcuda.jcublas.JCublas2;
 import jcuda.jcublas.cublasHandle;
@@ -685,22 +686,25 @@ public class JCudaObject extends GPUObject {
 	/** 
 	 * Thin wrapper over {@link #evict(long)}
 	 * @param size size to check
+	 * @return true if enough space is available, false otherwise
 	 * @throws DMLRuntimeException if DMLRuntimeException occurs
 	 */
-	static void ensureFreeSpace(long size) throws DMLRuntimeException {
-		ensureFreeSpace(null, size);
+	static boolean ensureFreeSpace(long size) throws DMLRuntimeException {
+		return ensureFreeSpace(null, size);
 	}
 
 	/**
 	 * Thin wrapper over {@link #evict(long)}
 	 * @param instructionName instructionName name of the instruction for which performance measurements are made
 	 * @param size size to check
+	 * @return true if enough space is available, false otherwise
 	 * @throws DMLRuntimeException if DMLRuntimeException occurs
 	 */
-	static void ensureFreeSpace(String instructionName, long size) throws DMLRuntimeException {
+	static boolean ensureFreeSpace(String instructionName, long size) throws DMLRuntimeException {
 		if(size >= getAvailableMemory()) {
-			evict(instructionName, size);
+			return evict(instructionName, size);
 		}
+		return true;
 	}
 	
 	@Override
@@ -1151,9 +1155,24 @@ public class JCudaObject extends GPUObject {
 				freeCUDASpaceMap.remove(size);
 			} else {
 				long t0 = System.nanoTime();
-				ensureFreeSpace(instructionName, size);
 				A = new Pointer();
-				cudaMalloc(A, size);
+				boolean enoughSpace = ensureFreeSpace(instructionName, size);
+				if (!enoughSpace) {
+					if (size >= GPUContext.currContext.getAvailableMemory()) {
+						attemptMemoryCompaction(instructionName);
+					}
+				}
+				try {
+					cudaMalloc(A, size);
+				} catch (CudaException e) {
+					LOG.warn("Couldn't allocated memory, due to internal fragmentation on GPU, attempting to free up memory and trying again", e);
+					clearAllReusableMemory(instructionName);
+					if (size >= GPUContext.currContext.getAvailableMemory()) {
+						attemptMemoryCompaction(instructionName);
+					}
+					cudaMalloc(A, size);
+				}
+
 				((JCudaContext)(JCudaContext.currContext)).deviceMemBytes.addAndGet(size);
 				GPUStatistics.cudaAllocTime.getAndAdd(System.nanoTime() - t0);
 				GPUStatistics.cudaAllocCount.getAndAdd(statsCount);

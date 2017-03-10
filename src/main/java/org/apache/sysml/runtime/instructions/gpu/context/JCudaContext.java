@@ -57,7 +57,7 @@ public class JCudaContext extends GPUContext {
 	private static final Log LOG = LogFactory.getLog(JCudaContext.class.getName());
 
 	/** Global list of allocated {@link GPUObject} instances. This list must be accessed in a synchronized way */
-	public static ArrayList<GPUObject> allocatedPointers = new ArrayList<GPUObject>();
+	public static ArrayList<JCudaObject> allocatedPointers = new ArrayList<JCudaObject>();
 
 	// The minimum CUDA Compute capability needed for SystemML.
 	// After compute capability 3.0, 2^31 - 1 blocks and 1024 threads per block are supported.

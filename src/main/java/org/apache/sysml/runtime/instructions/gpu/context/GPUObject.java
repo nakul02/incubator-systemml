@@ -19,6 +19,7 @@
 package org.apache.sysml.runtime.instructions.gpu.context;
 
 import jcuda.Pointer;
+import jcuda.runtime.JCuda;
 import org.apache.sysml.runtime.DMLRuntimeException;
 import org.apache.sysml.runtime.controlprogram.caching.CacheException;
 import org.apache.sysml.runtime.controlprogram.caching.MatrixObject;
@@ -26,6 +27,7 @@ import org.apache.sysml.runtime.matrix.data.MatrixBlock;
 import org.apache.sysml.utils.GPUStatistics;
 import org.apache.sysml.utils.LRUCacheMap;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -114,11 +116,38 @@ public abstract class GPUObject
 	/**
 	 * Convenience wrapper over {@link GPUObject#evict(String, long)}
 	 * @param GPUSize Desired size to be freed up on the GPU
+	 * @return true if enough space was freed, false otherwise
 	 * @throws DMLRuntimeException If no blocks to free up or if not enough blocks with zero locks on them.
 	 */
-	protected static void evict(final long GPUSize) throws DMLRuntimeException {
-		evict(null, GPUSize);
+	protected static boolean evict(final long GPUSize) throws DMLRuntimeException {
+		return evict(null, GPUSize);
 	}
+
+
+	protected static void clearAllReusableMemory(String instructionName) throws DMLRuntimeException {
+		LRUCacheMap<Long, Pointer> lruCacheMap = JCudaObject.freeCUDASpaceMap;
+		while (lruCacheMap.size() > 0) {
+			Pointer toFree = JCudaObject.freeCUDASpaceMap.removeAndGetLRUEntry().getValue();
+			JCudaObject.cudaFreeHelper(instructionName, toFree, true);
+		}
+	}
+
+	protected static void attemptMemoryCompaction(String instructionName) throws DMLRuntimeException {
+		ArrayList<JCudaObject> backupList = new ArrayList<JCudaObject>();
+		while (!JCudaContext.allocatedPointers.isEmpty()) {
+			JCudaObject o = JCudaContext.allocatedPointers.get(0);
+		//for (JCudaObject o : JCudaContext.allocatedPointers){
+			if (o.isDeviceCopyModified){
+				o.copyFromDeviceToHost();
+			}
+			o.clearData(true);
+			backupList.add(o);
+		}
+		for (JCudaObject o : backupList){
+			o.copyFromHostToDevice();
+		}
+	}
+
 
 	/**
 	 * Cycles through the sorted list of allocated {@link GPUObject} instances. Sorting is based on
@@ -127,10 +156,11 @@ public abstract class GPUObject
 	 * // TODO: update it with hybrid policy
 	 * @param instructionName name of the instruction for which performance measurements are made
 	 * @param GPUSize Desired size to be freed up on the GPU
+	 * @return true if enough space was freed, false otherwise
 	 * @throws DMLRuntimeException If no blocks to free up or if not enough blocks with zero locks on them.	 
 	 */
 	@SuppressWarnings("rawtypes")
-	protected static void evict(String instructionName, final long GPUSize) throws DMLRuntimeException {
+	protected static boolean evict(String instructionName, final long GPUSize) throws DMLRuntimeException {
 		synchronized (JCudaContext.syncObj) {
 
 			// Release the set of free blocks maintained in a JCudaObject.freeCUDASpaceMap
@@ -144,7 +174,7 @@ public abstract class GPUObject
 			}
 
 			if (GPUSize <= getAvailableMemory())
-				return;
+				return true;
 
 			if (JCudaContext.allocatedPointers.size() == 0) {
 				throw new DMLRuntimeException("There is not enough memory on device for this matrix!");
@@ -196,7 +226,7 @@ public abstract class GPUObject
 				while (GPUSize > getAvailableMemory() && JCudaContext.allocatedPointers.size() > 0) {
 					GPUObject toBeRemoved = JCudaContext.allocatedPointers.get(JCudaContext.allocatedPointers.size() - 1);
 					if (toBeRemoved.numLocks.get() > 0) {
-						throw new DMLRuntimeException("There is not enough memory on device for this matrix!");
+						return false;
 					}
 					if (toBeRemoved.isDeviceCopyModified) {
 						toBeRemoved.copyFromDeviceToHost();
@@ -206,6 +236,7 @@ public abstract class GPUObject
 				}
 			}
 		}
+		return false;
 	}
 
 	/**
@@ -218,7 +249,7 @@ public abstract class GPUObject
 
 	/**
 	 * Clears the data associated with this {@link GPUObject} instance
-	 * @param eager whether to be done synchronously or asynchronously
+	 * @param eager whether to be done eagerly or lazyily
 	 * @throws CacheException ?
 	 */
 	public void clearData(boolean eager) throws CacheException {

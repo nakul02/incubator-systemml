@@ -53,7 +53,8 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
     if log_file_path is not None:
         log_file = open(log_file_path + '.log', "w")
         log_file.write(' '.join(exec_command))
-        proc1 = subprocess.Popen(exec_command, stdout=log_file,
+        log_file.write('\n')
+    proc1 = subprocess.Popen(exec_command, stdout=log_file,
                              stderr=subprocess.STDOUT)
     else:
         proc1 = subprocess.Popen(exec_command, stdout=subprocess.PIPE,

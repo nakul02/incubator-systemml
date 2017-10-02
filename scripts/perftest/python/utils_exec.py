@@ -52,12 +52,14 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
 
     exec_command = shlex.split(cmd_string)
     log_file = None
+    is_temp_file = False
 
     if log_file_path is not None:
         log_file = open(log_file_path + '.log', "w+")
     else:
         os_log_file, log_file_path = tempfile.mkstemp()
         log_file = os.fdopen(os_log_file, 'w+')
+        is_temp_file = True
 
     log_file.write(' '.join(exec_command))
     log_file.write('\n')
@@ -67,7 +69,7 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
     return_code = proc1.returncode
 
     log_file.close()
-    log_file.open(log_file_path, 'r+')
+    log_file = open(log_file_path, 'r+')
 
     if return_code == 0:
         if extract == 'time':
@@ -82,6 +84,10 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
     if return_code != 0:
         return_data = 'proc_fail'
         print('sub-process failed, return code {}'.format(return_code))
+
+    if is_temp_file:
+        os.remove(log_file_path)
+
     return return_data
 
             

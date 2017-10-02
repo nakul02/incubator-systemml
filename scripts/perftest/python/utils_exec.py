@@ -24,6 +24,7 @@ import sys
 import subprocess
 import shlex
 import re
+import tempfile
 
 # Subprocess and log parsing related functions
 
@@ -49,39 +50,40 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
     # print(cmd_string)
 
     exec_command = shlex.split(cmd_string)
+    log_file = None
 
-    if log_file_path is not None:
-        log_file = open(log_file_path + '.log', "w")
+    try:
+        if log_file_path is not None:
+            log_file = open(log_file_path + '.log', "w")
+        else:
+            log_file = tempfile.TemporaryFile()
+
         log_file.write(' '.join(exec_command))
         log_file.write('\n')
-    proc1 = subprocess.Popen(exec_command, stdout=log_file,
-                             stderr=subprocess.STDOUT)
-    else:
-        proc1 = subprocess.Popen(exec_command, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
-        error_arr, out_arr = get_all_logs(proc1)
-        log_file = out_arr + error_arr
-        log_file.insert(0, ' '.join(exec_command))
+        proc1 = subprocess.Popen(exec_command, stdout=log_file,
+                                 stderr=subprocess.STDOUT)
 
-    return_code = proc1.returncode
+        return_code = proc1.returncode
 
-    if return_code == 0:
-        if extract == 'time':
-            return_data = parse_time(log_file)
-        if extract == 'dir':
-            return_data = parse_hdfs_paths(log_file)
-        if extract == 'hdfs_base':
-            return_data = parse_hdfs_base(log_file)
-        if extract is None:
-            return_data = 0
+        if return_code == 0:
+            if extract == 'time':
+                return_data = parse_time(log_file)
+            if extract == 'dir':
+                return_data = parse_hdfs_paths(log_file)
+            if extract == 'hdfs_base':
+                return_data = parse_hdfs_base(log_file)
+            if extract is None:
+                return_data = 0
 
-    if return_code != 0:
-        return_data = 'proc_fail'
-        print('sub-process failed, return code {}'.format(return_code))
+        if return_code != 0:
+            return_data = 'proc_fail'
+            print('sub-process failed, return code {}'.format(return_code))
+        return return_data
+    finally:
+        if log_file is not None:
+            log_file.close()
 
-    return return_data
-
-
+            
 def parse_hdfs_base(std_outs):
     """
     return: String

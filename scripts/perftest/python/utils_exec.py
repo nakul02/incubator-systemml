@@ -56,12 +56,13 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
         if log_file_path is not None:
             log_file = open(log_file_path + '.log', "w")
         else:
-            log_file = tempfile.TemporaryFile()
+            log_file = tempfile.TemporaryFile(mode='w')
 
         log_file.write(' '.join(exec_command))
         log_file.write('\n')
         proc1 = subprocess.Popen(exec_command, stdout=log_file,
                                  stderr=subprocess.STDOUT)
+        proc1.wait()
 
         return_code = proc1.returncode
 

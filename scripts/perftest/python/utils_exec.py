@@ -55,7 +55,8 @@ def subprocess_exec(cmd_string, log_file_path=None, extract=None):
     is_temp_file = False
 
     if log_file_path is not None:
-        log_file = open(log_file_path + '.log', "w+")
+        log_file_path = log_file_path + '.log'
+        log_file = open(log_file_path, "w+")
     else:
         os_log_file, log_file_path = tempfile.mkstemp()
         log_file = os.fdopen(os_log_file, 'w+')
